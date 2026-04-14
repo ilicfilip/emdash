@@ -23,6 +23,7 @@ import { isSqlite } from "./database/dialect-helpers.js";
 import { runMigrations } from "./database/migrations/runner.js";
 import { RevisionRepository } from "./database/repositories/revision.js";
 import type { ContentItem as ContentItemInternal } from "./database/repositories/types.js";
+import { validateIdentifier } from "./database/validate.js";
 import { normalizeMediaValue } from "./media/normalize.js";
 import type { MediaProvider, MediaProviderCapabilities } from "./media/types.js";
 import type { SandboxedPlugin, SandboxRunner } from "./plugins/sandbox/types.js";
@@ -36,8 +37,10 @@ import type {
 	PageMetadataContribution,
 	PageFragmentContribution,
 } from "./plugins/types.js";
+import { invalidateUrlPatternCache } from "./query.js";
 import type { FieldType } from "./schema/types.js";
 import { hashString } from "./utils/hash.js";
+import { COMMIT, VERSION } from "./version.js";
 
 const LEADING_SLASH_PATTERN = /^\//;
 
@@ -55,6 +58,7 @@ const VALID_LINK_REL = new Set([
 	"alternate",
 	"author",
 	"license",
+	"nlweb",
 	"site.standard.document",
 ]);
 
@@ -401,11 +405,14 @@ export class EmDashRuntime {
 		this.pluginStates.set(pluginId, status);
 		if (status === "active") {
 			this.enabledPlugins.add(pluginId);
+			await this.rebuildHookPipeline();
+			await this._hooks.runPluginActivate(pluginId);
 		} else {
+			// Fire deactivate on the current pipeline while the plugin is still in it
+			await this._hooks.runPluginDeactivate(pluginId);
 			this.enabledPlugins.delete(pluginId);
+			await this.rebuildHookPipeline();
 		}
-
-		await this.rebuildHookPipeline();
 	}
 
 	/**
@@ -1254,8 +1261,8 @@ export class EmDashRuntime {
 				version: plugin.version,
 				enabled,
 				adminMode,
-				adminPages: plugin.admin?.pages,
-				dashboardWidgets: plugin.admin?.widgets,
+				adminPages: plugin.admin?.pages ?? [],
+				dashboardWidgets: plugin.admin?.widgets ?? [],
 				portableTextBlocks: plugin.admin?.portableTextBlocks,
 				fieldWidgets: plugin.admin?.fieldWidgets,
 			};
@@ -1277,8 +1284,8 @@ export class EmDashRuntime {
 				enabled,
 				sandboxed: true,
 				adminMode: hasAdminPages || hasWidgets ? "blocks" : "none",
-				adminPages: entry.adminPages,
-				dashboardWidgets: entry.adminWidgets,
+				adminPages: entry.adminPages ?? [],
+				dashboardWidgets: entry.adminWidgets ?? [],
 			};
 		}
 
@@ -1300,15 +1307,41 @@ export class EmDashRuntime {
 				enabled,
 				sandboxed: true,
 				adminMode: hasAdminPages || hasWidgets ? "blocks" : "none",
-				adminPages: pages,
-				dashboardWidgets: widgets,
+				adminPages: pages ?? [],
+				dashboardWidgets: widgets ?? [],
 			};
 		}
 
-		// Generate hash from both collections and plugins so cache invalidates
-		// when plugins are enabled/disabled or their config changes
+		// Build taxonomies from database
+		let manifestTaxonomies: Array<{
+			name: string;
+			label: string;
+			labelSingular?: string;
+			hierarchical: boolean;
+			collections: string[];
+		}> = [];
+		try {
+			const rows = await this.db
+				.selectFrom("_emdash_taxonomy_defs")
+				.selectAll()
+				.orderBy("name")
+				.execute();
+			manifestTaxonomies = rows.map((row) => ({
+				name: row.name,
+				label: row.label,
+				labelSingular: row.label_singular ?? undefined,
+				hierarchical: row.hierarchical === 1,
+				collections: row.collections ? (JSON.parse(row.collections) as string[]).toSorted() : [],
+			}));
+		} catch (error) {
+			console.debug("EmDash: Could not load taxonomy definitions:", error);
+		}
+
+		// Build manifest hash
 		const manifestHash = await hashString(
-			JSON.stringify(manifestCollections) + JSON.stringify(manifestPlugins),
+			JSON.stringify(manifestCollections) +
+				JSON.stringify(manifestPlugins) +
+				JSON.stringify(manifestTaxonomies),
 		);
 
 		// Determine auth mode
@@ -1323,10 +1356,12 @@ export class EmDashRuntime {
 				: undefined;
 
 		return {
-			version: "0.1.0",
+			version: VERSION,
+			commit: COMMIT,
 			hash: manifestHash,
 			collections: manifestCollections,
 			plugins: manifestPlugins,
+			taxonomies: manifestTaxonomies,
 			authMode: authModeValue,
 			i18n,
 			marketplace: !!this.config.marketplace,
@@ -1334,11 +1369,12 @@ export class EmDashRuntime {
 	}
 
 	/**
-	 * Invalidate the cached manifest (no-op now that we don't cache).
-	 * Kept for API compatibility.
+	 * Invalidate cached data derived from the manifest/schema.
+	 * Called when collections are created, updated, or deleted.
 	 */
 	invalidateManifest(): void {
-		// No-op - manifest is rebuilt on each request
+		// Invalidate the URL pattern cache used by resolveEmDashPath
+		invalidateUrlPatternCache();
 	}
 
 	// =========================================================================
@@ -1510,6 +1546,7 @@ export class EmDashRuntime {
 							});
 
 							// Update entry to point to new draft (metadata only, not data columns)
+							validateIdentifier(collection, "collection");
 							const tableName = `ec_${collection}`;
 							await sql`
 								UPDATE ${sql.ref(tableName)}
@@ -1579,7 +1616,7 @@ export class EmDashRuntime {
 
 		// Run afterDelete hooks (fire-and-forget)
 		if (result.success) {
-			this.runAfterDeleteHooks(id, collection);
+			this.runAfterDeleteHooks(id, collection, false);
 		}
 
 		return result;
@@ -1601,7 +1638,14 @@ export class EmDashRuntime {
 	}
 
 	async handleContentPermanentDelete(collection: string, id: string) {
-		return handleContentPermanentDelete(this.db, collection, id);
+		const result = await handleContentPermanentDelete(this.db, collection, id);
+
+		// Run afterDelete hooks so plugins (e.g. AI Search) can clean up
+		if (result.success) {
+			this.runAfterDeleteHooks(id, collection, true);
+		}
+
+		return result;
 	}
 
 	async handleContentCountTrashed(collection: string) {
@@ -1815,7 +1859,10 @@ export class EmDashRuntime {
 		// resolution order in getPluginRouteMeta to avoid auth/execution mismatches.
 		const trustedPlugin = this.configuredPlugins.find((p) => p.id === pluginId);
 		if (trustedPlugin && this.enabledPlugins.has(trustedPlugin.id)) {
-			const routeRegistry = new PluginRouteRegistry({ db: this.db });
+			const routeRegistry = new PluginRouteRegistry({
+				db: this.db,
+				emailPipeline: this.email ?? undefined,
+			});
 			routeRegistry.register(trustedPlugin);
 
 			const routeKey = path.replace(LEADING_SLASH_PATTERN, "");
@@ -1973,11 +2020,11 @@ export class EmDashRuntime {
 		}
 	}
 
-	private runAfterDeleteHooks(id: string, collection: string): void {
+	private runAfterDeleteHooks(id: string, collection: string, permanent: boolean): void {
 		// Trusted plugins
 		if (this.hooks.hasHooks("content:afterDelete")) {
 			this.hooks
-				.runContentAfterDelete(id, collection)
+				.runContentAfterDelete(id, collection, permanent)
 				.catch((err) => console.error("EmDash afterDelete hook error:", err));
 		}
 
@@ -1987,7 +2034,7 @@ export class EmDashRuntime {
 			if (!pluginId || !this.isPluginEnabled(pluginId)) continue;
 
 			plugin
-				.invokeHook("content:afterDelete", { id, collection })
+				.invokeHook("content:afterDelete", { id, collection, permanent })
 				.catch((err) =>
 					console.error(`EmDash: Sandboxed plugin ${pluginId} afterDelete error:`, err),
 				);

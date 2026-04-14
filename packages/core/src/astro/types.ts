@@ -102,6 +102,7 @@ export type ManifestAuthMode = string;
  */
 export interface EmDashManifest {
 	version: string;
+	commit?: string;
 	hash: string;
 	collections: Record<string, ManifestCollection>;
 	plugins: Record<string, ManifestPlugin>;
@@ -126,6 +127,16 @@ export interface EmDashManifest {
 		locales: string[];
 		prefixDefaultLocale?: boolean;
 	};
+	/**
+	 * Taxonomy definitions for the admin sidebar.
+	 */
+	taxonomies: Array<{
+		name: string;
+		label: string;
+		labelSingular?: string;
+		hierarchical: boolean;
+		collections: string[];
+	}>;
 	/**
 	 * Whether the plugin marketplace is configured.
 	 * When true, the admin UI can show marketplace browse/install features.
