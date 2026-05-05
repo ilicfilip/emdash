@@ -9,6 +9,21 @@ export type SubFieldType =
 	| "color"
 	| "url";
 
+/**
+ * Conditional visibility rule for a sub-field. Evaluated against sibling values
+ * (the form object for `object-form`, the row object for `list`). Uses strict
+ * equality — `equals: 1` does not match `"1"`.
+ *
+ * Hidden sub-fields stay in the rendered DOM (display:none) so their values
+ * persist across toggles and round-trip through save. `required` is ignored
+ * while hidden so HTML5 validation does not block save.
+ */
+export type VisibleWhenCondition =
+	| { field: string; equals: unknown }
+	| { field: string; notEquals: unknown }
+	| { field: string; in: unknown[] }
+	| { field: string; notIn: unknown[] };
+
 /** A single sub-field definition, used in object-form and list options.fields. */
 export interface SubFieldDef {
 	/** JSON object key this sub-field maps to. */
@@ -42,6 +57,8 @@ export interface SubFieldDef {
 	prefix?: string;
 	/** For type: "textarea" — number of rows. */
 	rows?: number;
+	/** Show this sub-field only when the condition matches. See `VisibleWhenCondition`. */
+	visibleWhen?: VisibleWhenCondition;
 }
 
 /** Props passed to every field widget component by EmDash admin. */

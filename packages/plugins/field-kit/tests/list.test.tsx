@@ -185,6 +185,46 @@ describe("List widget", () => {
 		expect(screen.queryByText(/Widget misconfigured/i)).not.toBeNull();
 	});
 
+	it("evaluates visibleWhen per-row using the row's own values", () => {
+		const fieldsWithCondition = [
+			{ key: "needsDetail", label: "Needs detail", type: "boolean" as const },
+			{
+				key: "detail",
+				label: "Detail",
+				type: "text" as const,
+				visibleWhen: { field: "needsDetail", equals: true },
+			},
+		];
+		const { container } = render(
+			<List
+				value={[
+					{ needsDetail: true, detail: "row-zero-detail" },
+					{ needsDetail: false, detail: "row-one-detail" },
+				]}
+				onChange={() => {}}
+				label="Items"
+				id="x"
+				options={{ fields: fieldsWithCondition }}
+			/>,
+		);
+
+		// Row 0 is expanded by default → its `detail` field should be visible
+		// (not wrapped in aria-hidden).
+		const detailInRow0 = container.querySelector('input[id$="-detail"]');
+		expect(detailInRow0).not.toBeNull();
+		expect(detailInRow0!.closest('[aria-hidden="true"]')).toBeNull();
+
+		// Collapse row 0 and expand row 1 → its `detail` should be hidden
+		// because row 1's needsDetail is false.
+		fireEvent.click(screen.getByRole("button", { name: /^▸ Item 1$/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^▸ Item 2$/ }));
+		const detailInRow1 = container.querySelector('input[id$="-detail"]');
+		expect(detailInRow1).not.toBeNull();
+		const wrapper = detailInRow1!.closest('[aria-hidden="true"]');
+		expect(wrapper).not.toBeNull();
+		expect((wrapper as HTMLElement).style.display).toBe("none");
+	});
+
 	it("scopes sub-field ids under the parent field id for each expanded item", () => {
 		const { container } = render(
 			<List

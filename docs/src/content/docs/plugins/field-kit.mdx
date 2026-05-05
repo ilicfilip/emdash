@@ -218,7 +218,47 @@ Press <kbd>Enter</kbd> or `,` to commit a tag. <kbd>Backspace</kbd> on an empty 
 | `color` | Native color picker paired with a hex text input | — |
 | `url` | URL input (HTML5 `type="url"`) | `placeholder` |
 
-Common props on every sub-field: `required`, `helpText`, `defaultValue`.
+Common props on every sub-field: `required`, `helpText`, `defaultValue`, `visibleWhen`.
+
+### Conditional visibility (`visibleWhen`)
+
+Sub-fields can declare a `visibleWhen` rule that hides them when a sibling value doesn't match. The form reveals follow-up fields only when they're relevant — e.g. show "Cooking time" only when "Cooked?" is checked.
+
+```json
+{
+	"slug": "recipe",
+	"type": "json",
+	"widget": "field-kit:object-form",
+	"options": {
+		"fields": [
+			{ "key": "cooked", "label": "Cooked?", "type": "boolean" },
+			{
+				"key": "cooking_time",
+				"label": "Cooking time",
+				"type": "number",
+				"suffix": "min",
+				"visibleWhen": { "field": "cooked", "equals": true }
+			}
+		]
+	}
+}
+```
+
+Four operators are supported, all using **strict equality** (so `equals: 1` does not match `"1"`):
+
+| Operator | Matches when… | Example |
+|----------|---------------|---------|
+| `equals` | sibling value is strictly equal | `{ "field": "cooked", "equals": true }` |
+| `notEquals` | sibling value is not strictly equal | `{ "field": "stock", "notEquals": "out" }` |
+| `in` | sibling value is one of the listed values | `{ "field": "status", "in": ["draft", "review"] }` |
+| `notIn` | sibling value is not in the list | `{ "field": "status", "notIn": ["archived", "deleted"] }` |
+
+**Behaviour notes:**
+
+- **Values persist across toggles.** Hidden fields stay in the DOM (`display: none`); their values round-trip through save and reappear unchanged when the condition flips back. So a user can toggle a flag on, fill in the dependent field, toggle off, and toggle on again — the entered value is still there.
+- **`required` is stripped while hidden.** A required-but-hidden field can't block save through HTML5 validation. The required asterisk reappears with the field.
+- **`list` evaluates per-row.** In the `list` widget each row's `visibleWhen` is evaluated against that row's own values, so row A can show a sub-field that row B hides.
+- **Sibling lookup only.** `visibleWhen.field` references another sub-field within the same `object-form` (or list row) — not a top-level collection field.
 
 ## Summary templates
 

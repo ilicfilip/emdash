@@ -2,6 +2,7 @@ import { Input, InputArea, Select, Switch } from "@cloudflare/kumo";
 import * as React from "react";
 
 import type { SubFieldDef } from "./types";
+import { isSubFieldVisible } from "./utils";
 
 interface SubFieldProps {
 	/**
@@ -14,6 +15,11 @@ interface SubFieldProps {
 	def: SubFieldDef;
 	value: unknown;
 	onChange: (value: unknown) => void;
+	/**
+	 * Sibling values used to evaluate `def.visibleWhen`. For `object-form` this
+	 * is the whole form object; for `list` it is the current row's object.
+	 */
+	siblings?: Record<string, unknown>;
 }
 
 function normalizeSelectItems(
@@ -41,38 +47,49 @@ function labelWithRequired(label: string, required: boolean | undefined): React.
 /**
  * Renders a single sub-field input based on its type definition.
  * Used by object-form and list widgets.
+ *
+ * Sub-fields with a `visibleWhen` rule that evaluates to false stay in the
+ * DOM (so their values persist) but are hidden via `display:none` and have
+ * `required` stripped so HTML5 validation can't block save.
  */
-export function SubField({ id, def, value, onChange }: SubFieldProps) {
+export function SubField({ id, def, value, onChange, siblings }: SubFieldProps) {
 	const fieldId = id;
+	const visible = isSubFieldVisible(def.visibleWhen, siblings ?? {});
+	// Strip required while hidden so HTML5 validation cannot block save.
+	const required = visible ? def.required : false;
+
+	let input: React.ReactNode;
 
 	switch (def.type) {
 		case "text":
-			return (
+			input = (
 				<Input
 					id={fieldId}
 					type="text"
-					label={labelWithRequired(def.label, def.required)}
+					label={labelWithRequired(def.label, required)}
 					description={def.helpText}
-					required={def.required}
+					required={required}
 					placeholder={def.placeholder}
 					value={typeof value === "string" ? value : ""}
 					onChange={(e) => onChange(e.target.value)}
 				/>
 			);
+			break;
 
 		case "url":
-			return (
+			input = (
 				<Input
 					id={fieldId}
 					type="url"
-					label={labelWithRequired(def.label, def.required)}
+					label={labelWithRequired(def.label, required)}
 					description={def.helpText}
-					required={def.required}
+					required={required}
 					placeholder={def.placeholder ?? "https://"}
 					value={typeof value === "string" ? value : ""}
 					onChange={(e) => onChange(e.target.value)}
 				/>
 			);
+			break;
 
 		case "number": {
 			const prefixOrSuffix = def.prefix || def.suffix;
@@ -81,10 +98,10 @@ export function SubField({ id, def, value, onChange }: SubFieldProps) {
 				<Input
 					id={fieldId}
 					type="number"
-					label={prefixOrSuffix ? undefined : labelWithRequired(def.label, def.required)}
+					label={prefixOrSuffix ? undefined : labelWithRequired(def.label, required)}
 					aria-labelledby={prefixOrSuffix ? labelId : undefined}
 					description={prefixOrSuffix ? undefined : def.helpText}
-					required={def.required}
+					required={required}
 					placeholder={def.placeholder}
 					min={def.min}
 					max={def.max}
@@ -97,30 +114,33 @@ export function SubField({ id, def, value, onChange }: SubFieldProps) {
 				/>
 			);
 
-			if (!prefixOrSuffix) return numberInput;
-
-			return (
-				<div className="flex flex-col gap-1.5">
-					<label id={labelId} htmlFor={fieldId} className="text-sm font-medium text-kumo-default">
-						{def.label}
-						{def.required && <span className="ml-0.5 text-kumo-danger">*</span>}
-					</label>
-					<div className="flex items-center gap-2">
-						{def.prefix && (
-							<span className="whitespace-nowrap text-sm text-kumo-subtle">{def.prefix}</span>
-						)}
-						{numberInput}
-						{def.suffix && (
-							<span className="whitespace-nowrap text-sm text-kumo-subtle">{def.suffix}</span>
-						)}
+			if (!prefixOrSuffix) {
+				input = numberInput;
+			} else {
+				input = (
+					<div className="flex flex-col gap-1.5">
+						<label id={labelId} htmlFor={fieldId} className="text-sm font-medium text-kumo-default">
+							{def.label}
+							{required && <span className="ml-0.5 text-kumo-danger">*</span>}
+						</label>
+						<div className="flex items-center gap-2">
+							{def.prefix && (
+								<span className="whitespace-nowrap text-sm text-kumo-subtle">{def.prefix}</span>
+							)}
+							{numberInput}
+							{def.suffix && (
+								<span className="whitespace-nowrap text-sm text-kumo-subtle">{def.suffix}</span>
+							)}
+						</div>
+						{def.helpText && <p className="text-xs text-kumo-subtle">{def.helpText}</p>}
 					</div>
-					{def.helpText && <p className="text-xs text-kumo-subtle">{def.helpText}</p>}
-				</div>
-			);
+				);
+			}
+			break;
 		}
 
 		case "boolean":
-			return (
+			input = (
 				<Switch
 					id={fieldId}
 					label={def.label}
@@ -129,55 +149,59 @@ export function SubField({ id, def, value, onChange }: SubFieldProps) {
 					onCheckedChange={(checked) => onChange(checked)}
 				/>
 			);
+			break;
 
 		case "select": {
 			const items = normalizeSelectItems(def.options);
-			return (
+			input = (
 				<Select
-					label={labelWithRequired(def.label, def.required)}
+					label={labelWithRequired(def.label, required)}
 					description={def.helpText}
-					required={def.required}
+					required={required}
 					placeholder={def.placeholder ?? "Select..."}
 					value={typeof value === "string" ? value : ""}
 					onValueChange={(v) => onChange((v as string) === "" ? undefined : v)}
 					items={items}
 				/>
 			);
+			break;
 		}
 
 		case "textarea":
-			return (
+			input = (
 				<InputArea
 					id={fieldId}
-					label={labelWithRequired(def.label, def.required)}
+					label={labelWithRequired(def.label, required)}
 					description={def.helpText}
-					required={def.required}
+					required={required}
 					placeholder={def.placeholder}
 					rows={def.rows ?? 3}
 					value={typeof value === "string" ? value : ""}
 					onChange={(e) => onChange(e.target.value)}
 				/>
 			);
+			break;
 
 		case "date":
-			return (
+			input = (
 				<Input
 					id={fieldId}
 					type="date"
-					label={labelWithRequired(def.label, def.required)}
+					label={labelWithRequired(def.label, required)}
 					description={def.helpText}
-					required={def.required}
+					required={required}
 					value={typeof value === "string" ? value : ""}
 					onChange={(e) => onChange(e.target.value || undefined)}
 				/>
 			);
+			break;
 
 		case "color":
-			return (
+			input = (
 				<div className="flex flex-col gap-1.5">
 					<label htmlFor={fieldId} className="text-sm font-medium text-kumo-default">
 						{def.label}
-						{def.required && <span className="ml-0.5 text-kumo-danger">*</span>}
+						{required && <span className="ml-0.5 text-kumo-danger">*</span>}
 					</label>
 					<div className="flex items-center gap-2">
 						<input
@@ -198,16 +222,30 @@ export function SubField({ id, def, value, onChange }: SubFieldProps) {
 					{def.helpText && <p className="text-xs text-kumo-subtle">{def.helpText}</p>}
 				</div>
 			);
+			break;
 
 		default:
-			return (
+			input = (
 				<Input
 					id={fieldId}
 					type="text"
-					label={labelWithRequired(def.label, def.required)}
+					label={labelWithRequired(def.label, required)}
 					value={typeof value === "string" ? String(value) : ""}
 					onChange={(e) => onChange(e.target.value)}
 				/>
 			);
 	}
+
+	// Hidden fields stay in the DOM so their value persists, but display:none
+	// removes them from layout AND the tab order, and aria-hidden hides them
+	// from screen readers.
+	if (!visible) {
+		return (
+			<div style={{ display: "none" }} aria-hidden="true">
+				{input}
+			</div>
+		);
+	}
+
+	return <>{input}</>;
 }

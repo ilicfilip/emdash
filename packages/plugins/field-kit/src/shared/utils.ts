@@ -1,4 +1,4 @@
-import type { SubFieldDef, GridAxisDef } from "./types";
+import type { SubFieldDef, GridAxisDef, VisibleWhenCondition } from "./types";
 
 /**
  * Normalize a value into a plain object keyed by sub-field definitions.
@@ -81,6 +81,23 @@ export function normalizeGrid(
 export function normalizeTags(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * Evaluate a sub-field's `visibleWhen` condition against its sibling values.
+ * Returns true when no condition is set. Uses strict equality.
+ */
+export function isSubFieldVisible(
+	condition: VisibleWhenCondition | undefined,
+	siblings: Record<string, unknown>,
+): boolean {
+	if (!condition) return true;
+	const actual = siblings[condition.field];
+	if ("equals" in condition) return actual === condition.equals;
+	if ("notEquals" in condition) return actual !== condition.notEquals;
+	if ("in" in condition) return condition.in.some((v) => v === actual);
+	if ("notIn" in condition) return !condition.notIn.some((v) => v === actual);
+	return true;
 }
 
 const MUSTACHE_PATTERN = /\{\{(\w+)\}\}/g;

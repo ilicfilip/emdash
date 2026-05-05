@@ -288,6 +288,7 @@ export function List({ value, onChange, label, id, required, options, minimal }:
 											def={field}
 											value={item[field.key]}
 											onChange={(v) => updateField(index, field.key, v)}
+											siblings={item}
 										/>
 									))}
 								</div>

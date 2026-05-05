@@ -162,6 +162,119 @@ describe("ObjectForm widget", () => {
 		expect(payload).toEqual({ name: "b", stray: "unexpected" });
 	});
 
+	it("hides a sub-field when visibleWhen.equals does not match", () => {
+		const { container } = render(
+			<ObjectForm
+				value={{ cooked: false, cookingTime: 12 }}
+				onChange={() => {}}
+				label="Recipe"
+				id="r"
+				options={{
+					fields: [
+						{ key: "cooked", label: "Cooked?", type: "boolean" },
+						{
+							key: "cookingTime",
+							label: "Cooking time",
+							type: "number",
+							visibleWhen: { field: "cooked", equals: true },
+						},
+					],
+				}}
+			/>,
+		);
+		const hiddenInput = container.querySelector("#r-cookingTime");
+		expect(hiddenInput).not.toBeNull();
+		// Stays in DOM so its value persists across toggles.
+		const wrapper = hiddenInput!.closest('[aria-hidden="true"]');
+		expect(wrapper).not.toBeNull();
+		expect((wrapper as HTMLElement).style.display).toBe("none");
+	});
+
+	it("shows a sub-field when visibleWhen.equals matches", () => {
+		const { container } = render(
+			<ObjectForm
+				value={{ cooked: true, cookingTime: 12 }}
+				onChange={() => {}}
+				label="Recipe"
+				id="r"
+				options={{
+					fields: [
+						{ key: "cooked", label: "Cooked?", type: "boolean" },
+						{
+							key: "cookingTime",
+							label: "Cooking time",
+							type: "number",
+							visibleWhen: { field: "cooked", equals: true },
+						},
+					],
+				}}
+			/>,
+		);
+		const cookingInput = container.querySelector("#r-cookingTime");
+		expect(cookingInput).not.toBeNull();
+		expect(cookingInput!.closest('[aria-hidden="true"]')).toBeNull();
+	});
+
+	it("supports visibleWhen.in to match any of several values", () => {
+		const { container } = render(
+			<ObjectForm
+				value={{ status: "review" }}
+				onChange={() => {}}
+				label="Doc"
+				id="d"
+				options={{
+					fields: [
+						{
+							key: "status",
+							label: "Status",
+							type: "select",
+							options: [
+								{ value: "draft", label: "Draft" },
+								{ value: "review", label: "Review" },
+								{ value: "published", label: "Published" },
+							],
+						},
+						{
+							key: "reviewer",
+							label: "Reviewer",
+							type: "text",
+							visibleWhen: { field: "status", in: ["draft", "review"] },
+						},
+					],
+				}}
+			/>,
+		);
+		const reviewer = container.querySelector("#d-reviewer");
+		expect(reviewer).not.toBeNull();
+		expect(reviewer!.closest('[aria-hidden="true"]')).toBeNull();
+	});
+
+	it("strips required from hidden sub-fields so save isn't blocked", () => {
+		const { container } = render(
+			<ObjectForm
+				value={{ cooked: false }}
+				onChange={() => {}}
+				label="Recipe"
+				id="r"
+				options={{
+					fields: [
+						{ key: "cooked", label: "Cooked?", type: "boolean" },
+						{
+							key: "cookingTime",
+							label: "Cooking time",
+							type: "number",
+							required: true,
+							visibleWhen: { field: "cooked", equals: true },
+						},
+					],
+				}}
+			/>,
+		);
+		const hiddenInput = container.querySelector("#r-cookingTime") as HTMLInputElement | null;
+		expect(hiddenInput).not.toBeNull();
+		expect(hiddenInput!.required).toBe(false);
+	});
+
 	it("gives each sub-field a unique DOM id composed from the parent id", () => {
 		const { container } = render(
 			<ObjectForm
